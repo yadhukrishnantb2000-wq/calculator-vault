@@ -16,10 +16,10 @@ class CalculatorVaultApp(App):
         self.STORAGE_FILE = "vault_storage.dat"
         self.expression = ""
 
-        # Main Layout (Swappable screens simulated using active references)
+        # Main Layout (Acts as a container for swapping screens)
         self.main_layout = BoxLayout(orientation='vertical')
         
-        # Build Calculator Screen elements
+        # 1. Build Calculator Screen
         self.calc_screen = BoxLayout(orientation='vertical')
         self.display = TextInput(font_size=40, halign='right', readonly=True, size_hint_y=0.2, background_color=(0.15,0.15,0.15,1), foreground_color=(1,1,1,1))
         self.calc_screen.add_widget(self.display)
@@ -38,75 +38,105 @@ class CalculatorVaultApp(App):
                 grid.add_widget(btn)
         self.calc_screen.add_widget(grid)
         
-        # Build Vault Screen elements
+        # 2. Build Vault Screen
         self.vault_screen = BoxLayout(orientation='vertical', spacing=10)
         self.vault_screen.add_widget(Label(text="🔒 AES Encrypted Vault", font_size=24, size_hint_y=0.1, color=(1,0.6,0,1)))
+        
         self.secret_input = TextInput(multiline=True, font_size=18, background_color=(0.18,0.18,0.18,1), foreground_color=(1,1,1,1))
         self.vault_screen.add_widget(self.secret_input)
         
-        control_panel = BoxLayout(size_hint_y=0.15, spacing=10)
-        save_btn = Button(text="Save", background_color=(0.15,0.65,0.27,1))
-        save_btn.bind(on_press=self.save_vault)
-        lock_btn = Button(text="Lock", background_color=(0.85,0.2,0.27,1))
-        lock_btn.bind(on_press=self.lock_vault)
-        control_panel.add_widget(save_btn)
-        control_panel.add_widget(lock_btn)
-        self.vault_screen.add_widget(control_panel)
+        # Action buttons for the Vault
+        vault_btn_layout = BoxLayout(size_hint_y=0.15, spacing=10)
+        
+        save_btn = Button(text="Save & Lock", background_color=(0.1, 0.6, 0.2, 1))
+        save_btn.bind(on_press=self.save_vault_data)
+        
+        exit_btn = Button(text="Exit Vault", background_color=(0.7, 0.1, 0.1, 1))
+        exit_btn.bind(on_press=self.exit_vault)
+        
+        vault_btn_layout.add_widget(save_btn)
+        vault_btn_layout.add_widget(exit_btn)
+        self.vault_screen.add_widget(vault_btn_layout)
 
-        # Show Calculator first
+        # Initialize with the Calculator Screen visible
         self.main_layout.add_widget(self.calc_screen)
         return self.main_layout
 
-    def get_crypto_key(self):
-        salt = b'\x84\xfa\xbc\xdd\x0f\x91\xca\xfe'
-        kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=100000)
+    # --- Cryptography Helpers ---
+    def _derive_key(self):
+        """Derives a secure Fernet key from the passcode string."""
+        salt = b'fixed_salt_for_demo'  # In production, use a unique file-based salt
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=100000,
+        )
         return base64.urlsafe_b64encode(kdf.derive(self.secret_passcode.encode()))
 
+    # --- Button & Screen Logic ---
     def on_button_press(self, instance):
         text = instance.text
-        if text == "C":
-            self.expression = ""
-            self.display.text = ""
-        elif text == "=":
-            if self.expression == self.secret_passcode:
-                self.expression = ""
-                self.display.text = ""
-                self.show_vault()
-            else:
-                try:
-                    self.display.text = str(eval(self.expression))
-                    self.expression = self.display.text
-                except:
-                    self.display.text = "Error"
-                    self.expression = ""
-        else:
-            self.expression += text
-            self.display.text = self.expression
 
-    def show_vault(self):
+        if text == 'C':
+            self.expression = ""
+        elif text == '=':
+            # Check secret trigger condition before evaluating
+            if self.expression == self.secret_passcode:
+                self.open_vault()
+                return
+            try:
+                self.expression = str(eval(self.expression))
+            except Exception:
+                self.expression = "Error"
+        else:
+            if self.expression == "Error":
+                self.expression = ""
+            self.expression += text
+
+        self.display.text = self.expression
+
+    def open_vault(self):
+        """Swaps calculator layout with vault layout and decrypts saved data."""
         self.main_layout.clear_widgets()
         self.main_layout.add_widget(self.vault_screen)
-        if os.path.exists(self.STORAGE_FILE):
-            try:
-                with open(self.STORAGE_FILE, "rb") as f:
-                    encrypted_data = f.read()
-                f_cipher = Fernet(self.get_crypto_key())
-                self.secret_input.text = f_cipher.decrypt(encrypted_data).decode('utf-8')
-            except:
-                self.secret_input.text = "Error decrypting file."
+        self.secret_input.text = self.load_vault_data()
 
-    def save_vault(self, instance):
-        try:
-            content = self.secret_input.text.strip().encode('utf-8')
-            f_cipher = Fernet(self.get_crypto_key())
-            with open(self.STORAGE_FILE, "wb") as f:
-                f.write(f_cipher.encrypt(content))
-        except: pass
-
-    def lock_vault(self, instance):
-        self.secret_input.text = ""
+    def exit_vault(self, instance=None):
+        """Clears vault layout and restores the calculator display."""
+        self.expression = ""
+        self.display.text = ""
         self.main_layout.clear_widgets()
         self.main_layout.add_widget(self.calc_screen)
+
+    # --- Storage & Encryption Logic ---
+    def save_vault_data(self, instance):
+        """Encrypts data inside text input and saves it to a local file."""
+        try:
+            key = self._derive_key()
+            fernet = Fernet(key)
+            encrypted_data = fernet.encrypt(self.secret_input.text.encode())
+            
+            with open(self.STORAGE_FILE, "wb") as f:
+                f.write(encrypted_data)
+            
+            self.exit_vault()
+        except Exception as e:
+            self.secret_input.text = f"Error saving data: {str(e)}"
+
+    def load_vault_data(self):
+        """Loads and decrypts data from local storage if file exists."""
+        if not os.path.exists(self.STORAGE_FILE):
+            return "Type your secrets here..."
+        
+        try:
+            key = self._derive_key()
+            fernet = Fernet(key)
+            with open(self.STORAGE_FILE, "rb") as f:
+                encrypted_data = f.read()
+            return fernet.decrypt(encrypted_data).decode()
+        except Exception:
+            return "Error: Could not decrypt or load data."
 
 if __name__ == '__main__':
     CalculatorVaultApp().run()
