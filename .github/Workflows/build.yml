@@ -1,25 +1,65 @@
-name: Build
-on: [push, pull_request]
+name: Build Calculator Vault Android App
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
-  # Build job. Builds app for Android with Buildozer
-  build-android:
-    name: Build for Android
-    runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Build with Buildozer
-        uses: ArtemSBulgakov/buildozer-action@v1
-        id: buildozer
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          workdir: test_app
-          buildozer_version: stable
+          python-version: '3.10'
 
-      - name: Upload artifacts
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            ccache \
+            git \
+            libffi-dev \
+            libssl-dev \
+            libgstreamer1.0-dev \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            zlib1g-dev \
+            openjdk-17-jdk \
+            unzip
+
+      - name: Configure Buildozer Caching
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ccache
+            ~/.buildozer
+            .buildozer
+          key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            ${{ runner.os }}-buildozer-
+
+      - name: Accept Android SDK Licenses
+        run: |
+          mkdir -p ~/.android
+          touch ~/.android/repositories.cfg
+          yes | sdkmanager --licenses || true
+
+      - name: Build with Buildozer
+        run: |
+          # Tells buildozer to run safely inside automated environments
+          export BUILDOZER_WARN_ON_ROOT=0
+          buildozer android debug
+
+      - name: Upload Finished APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: package
-          path: ${{ steps.buildozer.outputs.filename }}
+          name: CalculatorVault-Debug-APK
+          path: bin/*.apk
