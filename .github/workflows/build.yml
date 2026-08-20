@@ -1,81 +1,154 @@
-name: Build Android APK
+name: Build Calculator Vault Android App
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ main ]
   pull_request:
-    branches: [ "main", "master" ]
-  workflow_dispatch:
+    branches: [ main ]
 
 jobs:
   build:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    # Cache Buildozer global directory to speed up future runs (~10 mins faster)
-    - name: Cache Buildozer Global Directory
-      uses: actions/cache@v4
-      with:
-        path: ~/.buildozer
-        key: ${{ runner.os }}-buildozer-global-${{ hashFiles('buildozer.spec') }}
-        restore-keys: |
-          ${{ runner.os }}-buildozer-global-
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
 
-    # Cache your project-specific build directory
-    - name: Cache Project Build Directory
-      uses: actions/cache@v4
-      with:
-        path: .buildozer
-        key: ${{ runner.os }}-buildozer-local-${{ hashFiles('buildozer.spec') }}
-        restore-keys: |
-          ${{ runner.os }}-buildozer-local-
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
 
-    # Install precise Android system dependencies required by Python-for-Android
-    - name: Install Dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          build-essential \
-          ccache \
-          git \
-          libffi-dev \
-          libssl-dev \
-          libgmp3-dev \
-          zlib1g-dev \
-          openjdk-17-jdk \
-          unzip \
-          zip \
-          python3-pip \
-          python3-setuptools \
-          autoconf \
-          libtool \
-          pkg-config
+          sudo apt-get install -y \
+            build-essential \
+            ccache \
+            git \
+            libffi-dev \
+            libssl-dev \
+            liblzma-dev \
+            libgstreamer1.0-dev \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            zlib1g-dev \
+            openjdk-17-jdk \
+            unzip \
+            zip \
+            autoconf \
+            automake \
+            libtool \
+            pkg-config
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install buildozer
+          pip install "cython<3"
 
-    - name: Install Buildozer and Cython
-      run: |
-        pip install --upgrade pip
-        pip install buildozer cython virtualenv
+      - name: Configure Buildozer Caching
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ccache
+            ~/.buildozer
+            .buildozer
+          key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            ${{ runner.os }}-buildozer-
 
-    # Run the compilation target via buildozer
-    - name: Build with Buildozer
-      run: |
-        buildozer android debug
-      env:
-        # Accepts Android SDK licenses automatically during runner build
-        APP_ANDROID_ACCEPT_SDK_LICENSE: "1"
+      - name: Prepare Android SDK
+        run: |
+          mkdir -p ~/.android
+          touch ~/.android/repositories.cfg
 
-    # Upload the compiled binary so you can download it from Github
-    - name: Upload APK Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: calculator-vault-apk
-        path: bin/*.apk
-        retention-days: 7
+      - name: Install Buildozer Android Toolchain
+        run: |
+          export BUILDOZER_WARN_ON_ROOT=0
+
+          # Initialize Buildozer so that python-for-android
+          # downloads the required Android SDK/NDK tools.
+          buildozer android update
+
+      - name: Find and Configure AIDL
+        run: |
+          export BUILDOZER_WARN_ON_ROOT=0
+
+          SDK_ROOT="$HOME/.buildozer/android/platform/android-sdk"
+
+          echo "Android SDK location:"
+          echo "$SDK_ROOT"
+
+          if [ -d "$SDK_ROOT" ]; then
+            echo "Android SDK found."
+
+            if [ -d "$SDK_ROOT/build-tools" ]; then
+              echo "Available Build Tools:"
+              find "$SDK_ROOT/build-tools" -maxdepth 1 -mindepth 1 -type d
+            fi
+
+            AIDL_PATH=$(find "$SDK_ROOT/build-tools" \
+              -type f \
+              -name aidl \
+              | sort -V \
+              | tail -n 1)
+
+            if [ -n "$AIDL_PATH" ]; then
+              echo "AIDL found:"
+              echo "$AIDL_PATH"
+
+              AIDL_DIR=$(dirname "$AIDL_PATH")
+              echo "$AIDL_DIR" >> "$GITHUB_PATH"
+
+              chmod +x "$AIDL_PATH"
+
+              "$AIDL_PATH" --version || true
+            else
+              echo "AIDL was not found in Build Tools."
+              echo "Available SDK contents:"
+              find "$SDK_ROOT" -maxdepth 3 -type f -name aidl || true
+              exit 1
+            fi
+          else
+            echo "Android SDK was not found."
+            exit 1
+          fi
+
+      - name: Accept Android SDK Licenses
+        run: |
+          SDK_ROOT="$HOME/.buildozer/android/platform/android-sdk"
+
+          if [ -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          elif [ -x "$SDK_ROOT/tools/bin/sdkmanager" ]; then
+            SDKMANAGER="$SDK_ROOT/tools/bin/sdkmanager"
+          else
+            SDKMANAGER=$(find "$SDK_ROOT" \
+              -type f \
+              -name sdkmanager \
+              | head -n 1)
+          fi
+
+          if [ -n "$SDKMANAGER" ] && [ -x "$SDKMANAGER" ]; then
+            echo "Using sdkmanager:"
+            echo "$SDKMANAGER"
+
+            yes | "$SDKMANAGER" --licenses || true
+          else
+            echo "sdkmanager was not found."
+            echo "Buildozer will manage the Android SDK during the build."
+          fi
+
+      - name: Build with Buildozer
+        run: |
+          export BUILDOZER_WARN_ON_ROOT=0
+          buildozer android debug
+
+      - name: Upload Finished APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CalculatorVault-Debug-APK
+          path: bin/*.apk
+          if-no-files-found: error
