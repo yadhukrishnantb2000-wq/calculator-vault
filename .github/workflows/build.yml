@@ -1,50 +1,81 @@
 name: Build Android APK
 
 on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+    - name: Checkout Code
+      uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+    # Cache Buildozer global directory to speed up future runs (~10 mins faster)
+    - name: Cache Buildozer Global Directory
+      uses: actions/cache@v4
+      with:
+        path: ~/.buildozer
+        key: ${{ runner.os }}-buildozer-global-${{ hashFiles('buildozer.spec') }}
+        restore-keys: |
+          ${{ runner.os }}-buildozer-global-
 
-      - name: Install System Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config zlib1g-dev libncurses5-dev libssl-dev libsqlite3-dev tk-dev libgdbm-dev libc6-dev libbz2-dev libffi-dev bsdmainutils
+    # Cache your project-specific build directory
+    - name: Cache Project Build Directory
+      uses: actions/cache@v4
+      with:
+        path: .buildozer
+        key: ${{ runner.os }}-buildozer-local-${{ hashFiles('buildozer.spec') }}
+        restore-keys: |
+          ${{ runner.os }}-buildozer-local-
 
-      - name: Install Buildozer & Cython
-        run: |
-          pip install --upgrade pip
-          pip install buildozer cython
+    # Install precise Android system dependencies required by Python-for-Android
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          ccache \
+          git \
+          libffi-dev \
+          libssl-dev \
+          libgmp3-dev \
+          zlib1g-dev \
+          openjdk-17-jdk \
+          unzip \
+          zip \
+          python3-pip \
+          python3-setuptools \
+          autoconf \
+          libtool \
+          pkg-config
 
-      # --- START CACHE STEP ---
-      - name: Cache Buildozer Global and Local Files
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.buildozer
-            .buildozer
-          key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec') }}
-          restore-keys: |
-            ${{ runner.os }}-buildozer-
-      # --- END CACHE STEP ---
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
 
-      # Buildozer will use the cached SDK/NDK instead of downloading them again
-      - name: Build APK with Buildozer
-        run: |
-          yes | buildozer android debug
+    - name: Install Buildozer and Cython
+      run: |
+        pip install --upgrade pip
+        pip install buildozer cython virtualenv
 
-      - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Calculator-APK
-          path: .buildozer/android/platform/build-android/*/build/outputs/apk/*/*.apk
+    # Run the compilation target via buildozer
+    - name: Build with Buildozer
+      run: |
+        buildozer android debug
+      env:
+        # Accepts Android SDK licenses automatically during runner build
+        APP_ANDROID_ACCEPT_SDK_LICENSE: "1"
+
+    # Upload the compiled binary so you can download it from Github
+    - name: Upload APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: calculator-vault-apk
+        path: bin/*.apk
+        retention-days: 7
